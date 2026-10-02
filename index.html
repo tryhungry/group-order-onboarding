@@ -188,6 +188,20 @@
     .learn { padding: 20px; }
   }
 </style>
+<script>
+  !function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+".people (stub)"},o="init capture identify alias people.set people.set_once set_config register register_once unregister opt_out_capturing has_opted_out_capturing opt_in_capturing reset isFeatureEnabled onFeatureFlags getFeatureFlag getFeatureFlagPayload reloadFeatureFlags group updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures getActiveMatchingSurveys getSurveys onSessionId".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
+  posthog.init("phc_jhf3X1iISoaJK2rb836CWjEYAHwnubSB8Lvanmqn15y", {
+    api_host: "https://us.i.posthog.com",
+    person_profiles: "identified_only"
+  });
+  // ?s=email marks the automated welcome email; no param means a manual/direct share.
+  (function () {
+    var p = new URLSearchParams(location.search);
+    posthog.register({ source: p.get("s") || "direct" });
+    var uid = p.get("uid");
+    if (uid) posthog.identify(uid);
+  })();
+</script>
 </head>
 <body>
   <nav>
@@ -317,7 +331,12 @@
     const label = i === 0 ? "▶" : i === chapters.length - 1 ? "✓" : i;
     b.innerHTML = `<span class="num">${label}</span><span class="ch-title"></span><span class="time">${fmt(c.start)}</span>`;
     b.querySelector(".ch-title").textContent = c.title;
-    b.addEventListener("click", () => { video.currentTime = c.start; video.play(); });
+    b.addEventListener("click", () => {
+      track("walkthrough_chapter_clicked", {
+        chapter_index: i, chapter_name: c.title, from_time: Math.round(video.currentTime), to_time: c.start
+      });
+      video.currentTime = c.start; video.play();
+    });
     li.appendChild(b); list.appendChild(li);
     return b;
   });
@@ -338,6 +357,53 @@
   video.addEventListener("timeupdate", update);
   video.addEventListener("seeked", update);
   update();
+
+  // ---- PostHog video analytics ----
+  const track = (name, props) => {
+    try { posthog.capture(name, Object.assign({ video_version: "2026-09-29" }, props)); } catch (e) {}
+  };
+  let started = false, completed = false, lastChapterSent = -1, playStart = null, watchedSecs = 0;
+  const milestones = [25, 50, 75, 100], hit = new Set();
+  const tick = () => { if (playStart !== null) { watchedSecs += (Date.now() - playStart) / 1000; playStart = Date.now(); } };
+
+  video.addEventListener("play", () => {
+    playStart = Date.now();
+    if (!started) { started = true; track("walkthrough_video_played", { duration: Math.round(video.duration || 0) }); }
+  });
+  video.addEventListener("pause", () => { tick(); playStart = null; });
+  video.addEventListener("timeupdate", () => {
+    if (!video.duration) return;
+    const pct = 100 * video.currentTime / video.duration;
+    milestones.forEach(m => {
+      // Only count natural playback, not a skip past the milestone.
+      if (pct >= m && !hit.has(m) && !video.seeking && pct - m < 5) {
+        hit.add(m);
+        track("walkthrough_video_progress", { percent: m });
+      }
+    });
+    if (current !== lastChapterSent && !video.paused) {
+      lastChapterSent = current;
+      track("walkthrough_chapter_viewed", { chapter_index: current, chapter_name: chapters[current].title });
+    }
+  });
+  video.addEventListener("ended", () => {
+    if (completed) return;
+    completed = true; tick();
+    track("walkthrough_video_completed", { seconds_watched: Math.round(watchedSecs) });
+  });
+  // Send total watch time when the visitor leaves, so drop-offs are captured.
+  const leave = () => {
+    if (!started) return;
+    tick();
+    track("walkthrough_video_exit", {
+      seconds_watched: Math.round(watchedSecs),
+      max_position: Math.round(maxWatched),
+      percent_watched: video.duration ? Math.round(100 * maxWatched / video.duration) : 0,
+      last_chapter: chapters[Math.max(current, 0)].title
+    });
+  };
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") leave(); });
+  window.addEventListener("pagehide", leave);
 
   // ---- Feedback -> Google Form ----
   // Fill these in from the Google Form's "Get pre-filled link" URL.
