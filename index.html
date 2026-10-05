@@ -392,9 +392,14 @@
     track("walkthrough_video_completed", { seconds_watched: Math.round(watchedSecs) });
   });
   // Send total watch time when the visitor leaves, so drop-offs are captured.
+  // Only sends when there is new viewing since the last exit event, so tab switches don't spam it.
+  let lastExitSig = "";
   const leave = () => {
     if (!started) return;
     tick();
+    const sig = Math.round(watchedSecs) + ":" + Math.round(maxWatched);
+    if (sig === lastExitSig) return;
+    lastExitSig = sig;
     track("walkthrough_video_exit", {
       seconds_watched: Math.round(watchedSecs),
       max_position: Math.round(maxWatched),
